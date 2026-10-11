@@ -55,7 +55,6 @@ Create a local database named `wallet_system`.
 cd backend
 pip install -r requirements.txt
 alembic upgrade head
-python -m app.db.seed
 uvicorn app.main:app --reload
 ```
 

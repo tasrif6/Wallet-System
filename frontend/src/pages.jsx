@@ -180,26 +180,45 @@ export function ForgotPassword () {
     const [email, setEmail]= useState("");
     const [message, setMessage] = useState("");
     const [err, setErr] = useState("");
+    const [loading, setLoading] = useState("");
 
     return (
         <AuthBox
             title="Forgot your password?"
-            subtitle ="Enter your email to reset your password">
-            
+            subtitle ="Enter your email to reset your password"
+            footer= {
+              <>
+                New here?{" "}
+                <Link className="font-semibold text-slate-950" to="/register">
+                  Create an account
+                </Link>
+              </>
+            }>
             <form className="mt-6 space-y-4"
                 onSubmit={async (x) => {
                     x.preventDefault();
                     setErr("");
                     setMessage("");
-                    
+                    setLoading(true);
+
                     try {
-                        await auth.forgot_password({ email });
-                  
-                        setMessage("Password reset code has been send in the terminal. Please check!")
+                        
+                        const data = await auth.forgot_password({ email: email.trim() });
+                        if (data.exists === false) {
+                          setErr("No Account matched with this email address");
+                          return;
+                        }
+                
+                        setMessage(data.message)
+                        return;
                     } catch (err){
                         setErr(err.message)
+                    } finally {
+                      setLoading(false)
                     }
                 }}>
+
+
                 <input 
                     className={input}
                     type="email"
@@ -211,7 +230,8 @@ export function ForgotPassword () {
                 {message && (<p className="text-sm text=green-700">{message}</p>)}
                 <Error>{err}</Error>
                 <button className={`${primary} w-full`}
-                    type="submit">Send Reset Code
+                    type="submit"
+                    disabled={loading}> {loading ? "Sending..." : "Send Reset Code"}
                 </button>
             </form>
         </AuthBox>

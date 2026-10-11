@@ -69,7 +69,7 @@ async def login(data: LoginIn, db: AsyncSession = Depends(get_db)):
 async def forgot_password(
     data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)
 ):
-    user = await db.scalar(select(User).where(User.email == data.email))
+    user = await db.scalar(select(User).where(User.email == data.email.strip()))
 
     if user:
         reset_code = f"{secrets.randbelow(1_000_000):06d}"
@@ -77,9 +77,14 @@ async def forgot_password(
         print(f"\nPassword Reset Code for {user.email}: "
               f"{reset_code}\n",
               flush=True)
+        return ForgotPasswordOut(
+            exists=True,
+            message="Password reset code has been send in the terminal. Please check!",
+        )
 
     return ForgotPasswordOut(
-        message="If the email is registered, a reset code will be generated in the terminal."
+        exists=False,
+        message="No account matched with this email address.",
     )
 
 @router.post("/auth/reset-password", response_model = ResetPasswordRequest)

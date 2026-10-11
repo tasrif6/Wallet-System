@@ -26,6 +26,7 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ForgotPasswordOut(BaseModel):
+    exists: bool
     message: str
 
 
