@@ -1,6 +1,12 @@
 from decimal import Decimal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
 
 
 def money(v: Decimal) -> Decimal:
@@ -29,11 +35,19 @@ class ForgotPasswordOut(BaseModel):
     exists: bool
     message: str
 
+class VerifyResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(pattern=r"^\d{6}$")
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
-    code: str
     new_password: str = Field(min_length=6, max_length=128)
+    confirm_password: str = Field(min_length=6, max_length=128)
+
+
+class PasswordResetOut(BaseModel):
+    message: str
+
 
 class AuthOut(BaseModel):
     access_token: str

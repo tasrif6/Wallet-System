@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select, func, desc, text
@@ -23,10 +23,7 @@ from app.services.ledger_service import (
 )
 
 import secrets
-from pydantic import BaseModel, EmailStr
 from app.models import User
-from app.db.database import SessionLocal
-from sqlalchemy import select
 
 router = APIRouter()
 
@@ -73,6 +70,10 @@ async def forgot_password(
 
     if user:
         reset_code = f"{secrets.randbelow(1_000_000):06d}"
+        user.reset_code_hash = hash_password(reset_code)
+        user.reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
+        user.reset_verified = False
+        await db.commit()
 
         print(f"\nPassword Reset Code for {user.email}: "
               f"{reset_code}\n",
@@ -87,11 +88,63 @@ async def forgot_password(
         message="No account matched with this email address.",
     )
 
-@router.post("/auth/reset-password", response_model = ResetPasswordRequest)
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    user = await db.scalar(select(User).where(User.email == data.email))
 
-        
+@router.post("/auth/verify-reset-code", response_model=PasswordResetOut)
+async def verify_reset_code(
+    data: VerifyResetCodeRequest, db: AsyncSession = Depends(get_db)
+):
+    user = await db.scalar(
+        select(User).where(User.email == data.email).with_for_update()
+    )
+    if not user or not user.reset_code_hash or not user.reset_code_expires_at:
+        raise HTTPException(400, "Invalid or expired reset code")
+
+    expires_at = user.reset_code_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        user.reset_code_hash = None
+        user.reset_code_expires_at = None
+        user.reset_verified = False
+        await db.commit()
+        raise HTTPException(400, "Reset code has expired. Request a new code.")
+
+    if not verify_password(data.code, user.reset_code_hash):
+        raise HTTPException(400, "Invalid or expired reset code")
+
+    user.reset_code_hash = None
+    user.reset_verified = True
+    await db.commit()
+    return PasswordResetOut(message="Code verified. You may now reset your password.")
+
+
+@router.post("/auth/reset-password", response_model=PasswordResetOut)
+async def reset_password(
+    data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)
+):
+    user = await db.scalar(
+        select(User).where(User.email == data.email).with_for_update()
+    )
+    if not user or not user.reset_verified or not user.reset_code_expires_at:
+        raise HTTPException(400, "Verify a reset code before changing your password")
+
+    expires_at = user.reset_code_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        user.reset_code_hash = None
+        user.reset_code_expires_at = None
+        user.reset_verified = False
+        await db.commit()
+        raise HTTPException(400, "Reset verification has expired. Request a new code.")
+
+    user.password_hash = hash_password(data.new_password)
+    user.reset_code_hash = None
+    user.reset_code_expires_at = None
+    user.reset_verified = False
+    await db.commit()
+    return PasswordResetOut(message="Password changed successfully")
+
 
 @router.get("/auth/me", response_model=UserOut)
 async def me(user=Depends(current_user)):

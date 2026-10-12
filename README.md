@@ -43,7 +43,7 @@ Local PostgreSQL
 
 ## Business configuration
 
-The task file does not specify exact values for transfer fees, daily transfer limits, withdrawal approval threshold, or currency. These are therefore environment configuration values in `backend/.env`, not hidden assumptions in the code.
+The task file does not specify exact values for transfer fees, daily transfer limits, withdrawal approval threshold, or currency. These are environment configuration values in the repository-root `.env`, which is shared by the backend and frontend development server.
 
 ## Setup
 
@@ -62,11 +62,14 @@ uvicorn app.main:app --reload
 ```powershell
 cd frontend
 npm install
-copy .env
 npm run dev
 ```
 
+The backend loads settings from the repository-root `.env` regardless of the working directory. Vite also reads that file; set `VITE_API_URL` there to override the default backend URL (`http://localhost:8000`).
+
 Open the Vite URL shown in the terminal, normally http://localhost:5173.
+
+For password recovery, submit the account email on the Forgot Password page and retrieve the six-digit reset code from the backend terminal. Verify it within two minutes, then set and confirm the new password; successful changes return to sign-in.
 
 Change the local development credentials before using the project outside local development.
 

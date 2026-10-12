@@ -79,6 +79,7 @@ class User(Base):
     wallet: Mapped["Wallet"] = relationship(back_populates="user", uselist=False)
     reset_code_hash = mapped_column(String(255), nullable=True)
     reset_code_expires_at = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 class Wallet(Base):
     __tablename__ = "wallets"

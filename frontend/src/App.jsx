@@ -4,6 +4,7 @@ import {
   Login,
   Register,
   ForgotPassword,
+  VerifyPassword,
   ResetPassword,
   Dashboard,
   Deposit,
@@ -88,7 +89,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element = {<ResetPassword />} />
+      <Route path="/verify-otp" element={<VerifyPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/register" element={<Register />} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
