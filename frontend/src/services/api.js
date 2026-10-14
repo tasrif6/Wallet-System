@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const API_URL = "http://localhost:8000/api";
+const API_URL = `${(
+  import.meta.env.VITE_API_URL || "http://localhost:8000"
+).replace(/\/$/, "")}/api`;
 const axiosInstance = axios.create({
   baseURL: API_URL,
   headers: {
@@ -44,7 +46,10 @@ export const auth = {
   login: (data) => api("/auth/login", { method: "POST", body: data }),
   forgot_password: (data) =>
     api("/auth/forgot-password", { method: "POST", body: data }),
-  reset_password: (data) => api("/auth/reset-password", {method: "POST", body: data}),
+  verify_reset_code: (data) =>
+    api("/auth/verify-reset-code", { method: "POST", body: data }),
+  reset_password: (data) =>
+    api("/auth/reset-password", { method: "POST", body: data }),
   register: (data) => api("/auth/register", { method: "POST", body: data }),
   me: () => api("/auth/me"),
 };

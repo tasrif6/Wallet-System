@@ -4,6 +4,7 @@ import {
   Login,
   Register,
   ForgotPassword,
+  VerifyPassword,
   ResetPassword,
   Dashboard,
   Deposit,
@@ -34,8 +35,6 @@ function Layout({ children }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const links = [
-    ["/dashboard", "Dashboard"],
-    ["/transactions", "History"],
     ...(user?.role === "ADMIN" ? [["/admin", "Admin"]] : []),
   ];
   return (
@@ -63,14 +62,14 @@ function Layout({ children }) {
             ))}
             <button
               onClick={logout}
-              className="ml-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              className="ml-2 rounded-lg bg-slate-950 px-2 py-1 text-sm font-semibold text-white hover:bg-red-600"
             >
               Logout
             </button>
           </nav>
           <button
             onClick={logout}
-            className="rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white sm:hidden"
+            className="rounded-lg bg-slate-950 px-2 py-1 text-sm font-semibold text-white sm:hidden hover:bg-red-600"
           >
             Logout
           </button>
@@ -88,7 +87,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element = {<ResetPassword />} />
+      <Route path="/verify-otp" element={<VerifyPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/register" element={<Register />} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route

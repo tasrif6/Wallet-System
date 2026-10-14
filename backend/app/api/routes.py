@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select, func, desc, text
@@ -9,6 +9,7 @@ from app.schemas import *
 from app.core.deps import current_user, active_user, admin_user
 from app.core.security import hash_password, verify_password, create_access_token
 from app.services.money_service import (
+    ref,
     deposit,
     withdrawal,
     transfer,
@@ -23,10 +24,7 @@ from app.services.ledger_service import (
 )
 
 import secrets
-from pydantic import BaseModel, EmailStr
 from app.models import User
-from app.db.database import SessionLocal
-from sqlalchemy import select
 
 router = APIRouter()
 
@@ -73,6 +71,10 @@ async def forgot_password(
 
     if user:
         reset_code = f"{secrets.randbelow(1_000_000):06d}"
+        user.reset_code_hash = hash_password(reset_code)
+        user.reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
+        user.reset_verified = False
+        await db.commit()
 
         print(f"\nPassword Reset Code for {user.email}: "
               f"{reset_code}\n",
@@ -87,11 +89,63 @@ async def forgot_password(
         message="No account matched with this email address.",
     )
 
-@router.post("/auth/reset-password", response_model = ResetPasswordRequest)
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    user = await db.scalar(select(User).where(User.email == data.email))
 
-        
+@router.post("/auth/verify-reset-code", response_model=PasswordResetOut)
+async def verify_reset_code(
+    data: VerifyResetCodeRequest, db: AsyncSession = Depends(get_db)
+):
+    user = await db.scalar(
+        select(User).where(User.email == data.email).with_for_update()
+    )
+    if not user or not user.reset_code_hash or not user.reset_code_expires_at:
+        raise HTTPException(400, "Invalid or expired reset code")
+
+    expires_at = user.reset_code_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        user.reset_code_hash = None
+        user.reset_code_expires_at = None
+        user.reset_verified = False
+        await db.commit()
+        raise HTTPException(400, "Reset code has expired. Request a new code.")
+
+    if not verify_password(data.code, user.reset_code_hash):
+        raise HTTPException(400, "Invalid or expired reset code")
+
+    user.reset_code_hash = None
+    user.reset_verified = True
+    await db.commit()
+    return PasswordResetOut(message="Code verified. You may now reset your password.")
+
+
+@router.post("/auth/reset-password", response_model=PasswordResetOut)
+async def reset_password(
+    data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)
+):
+    user = await db.scalar(
+        select(User).where(User.email == data.email).with_for_update()
+    )
+    if not user or not user.reset_verified or not user.reset_code_expires_at:
+        raise HTTPException(400, "Verify a reset code before changing your password")
+
+    expires_at = user.reset_code_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        user.reset_code_hash = None
+        user.reset_code_expires_at = None
+        user.reset_verified = False
+        await db.commit()
+        raise HTTPException(400, "Reset verification has expired. Request a new code.")
+
+    user.password_hash = hash_password(data.new_password)
+    user.reset_code_hash = None
+    user.reset_code_expires_at = None
+    user.reset_verified = False
+    await db.commit()
+    return PasswordResetOut(message="Password changed successfully")
+
 
 @router.get("/auth/me", response_model=UserOut)
 async def me(user=Depends(current_user)):
@@ -108,8 +162,12 @@ async def make_deposit(
     data: AmountIn, user=Depends(active_user), db: AsyncSession = Depends(get_db)
 ):
     try:
+        user_id = user.id
         await db.rollback()
         async with db.begin():
+            user = await db.get(User, user_id)
+            if not user:
+                raise HTTPException(401, "User not found")
             tx, w = await deposit(db, user, data.amount)
         return DepositOut(
             reference_number=tx.reference_number,
@@ -127,8 +185,12 @@ async def make_withdrawal(
     data: AmountIn, user=Depends(active_user), db: AsyncSession = Depends(get_db)
 ):
     try:
+        user_id = user.id
         await db.rollback()
         async with db.begin():
+            user = await db.get(User, user_id)
+            if not user:
+                raise HTTPException(401, "User not found")
             tx, w, _ = await withdrawal(db, user, data.amount)
         return WithdrawalOut(
             reference_number=tx.reference_number,
@@ -185,8 +247,12 @@ async def make_transfer(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        user_id = user.id
         await db.rollback()
         async with db.begin():
+            user = await db.get(User, user_id)
+            if not user:
+                raise HTTPException(401, "User not found")
             tx, _ = await transfer(
                 db,
                 user,
@@ -270,7 +336,7 @@ async def transactions(
                 created_at=tx.created_at,
                 debit=debit,
                 credit=credit,
-                running_balance=running,
+                balance=running,
             )
         )
     return list(reversed(result))
@@ -487,7 +553,7 @@ async def unfreeze(
     return {"status": "ACTIVE"}
 
 
-@router.get("/admin/withdrawals/pending")
+@router.get("/admin/withdrawals")
 async def pending_withdrawals(
     admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
@@ -495,7 +561,7 @@ async def pending_withdrawals(
         await db.execute(
             select(WithdrawalRequest, Transaction, User, Wallet)
             .join(Transaction, WithdrawalRequest.transaction_id == Transaction.id)
-            .join(User, WithdrawalRequest.requested_by == User.id)
+            .join(User, WithdrawalRequest.id == User.id)
             .join(Wallet, WithdrawalRequest.wallet_id == Wallet.id)
             .where(WithdrawalRequest.status == WithdrawalStatus.PENDING)
             .order_by(WithdrawalRequest.created_at)
@@ -565,6 +631,7 @@ async def reject_withdrawal(
 async def reverse(
     transaction_id: str, admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
+    admin_id = admin.id
     await db.rollback()
     async with db.begin():
         original = await db.get(Transaction, transaction_id, with_for_update=True)
@@ -601,7 +668,7 @@ async def reverse(
             total_amount=original.total_amount,
             currency=original.currency,
             note=f"Reversal of {original.reference_number}",
-            initiated_by=admin.id,
+            initiated_by=admin_id,
             reversal_of=original.id,
             completed_at=datetime.now(timezone.utc),
         )

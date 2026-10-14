@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, auth } from "./services/api";
 import { useAuth } from "./context/AuthContext";
+import { IoIosArrowBack } from "react-icons/io";
 
 const input =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-4 focus:ring-slate-100";
 const primary =
   "inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
 const secondary =
-  "inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50";
+  "inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-black hover:text-white";
 
 function PageTitle({ title, description, children }) {
   return (
@@ -157,7 +158,7 @@ export function Login() {
             onChange={(x) => setP(x.target.value)}
             required
             />
-            <button type = "button" onClick={() => setShowPassword((prev) => !prev)} 
+            <button type = "button" onClick={() => setShowPassword((prev) => !prev)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500 hover:text-slate-950">
                     {showPassword ? "Hide" : "Show"}
             </button>
@@ -177,10 +178,10 @@ export function Login() {
 }
 
 export function ForgotPassword () {
+    const nav = useNavigate();
     const [email, setEmail]= useState("");
-    const [message, setMessage] = useState("");
     const [err, setErr] = useState("");
-    const [loading, setLoading] = useState("");
+    const [loading, setLoading] = useState(false);
 
     return (
         <AuthBox
@@ -198,19 +199,17 @@ export function ForgotPassword () {
                 onSubmit={async (x) => {
                     x.preventDefault();
                     setErr("");
-                    setMessage("");
                     setLoading(true);
 
                     try {
-                        
                         const data = await auth.forgot_password({ email: email.trim() });
                         if (data.exists === false) {
                           setErr("No Account matched with this email address");
                           return;
                         }
-                
-                        setMessage(data.message)
-                        return;
+                        nav("/verify-otp", {
+                          state: { email: email.trim(), message: data.message },
+                        });
                     } catch (err){
                         setErr(err.message)
                     } finally {
@@ -227,7 +226,6 @@ export function ForgotPassword () {
                     onChange={(x) => setEmail(x.target.value)}
                     required />
 
-                {message && (<p className="text-sm text=green-700">{message}</p>)}
                 <Error>{err}</Error>
                 <button className={`${primary} w-full`}
                     type="submit"
@@ -239,13 +237,78 @@ export function ForgotPassword () {
     )
 }
 
+export function VerifyPassword(){
+  const nav = useNavigate();
+  const location = useLocation();
+  const [email, setEmail] = useState(location.state?.email ?? "");
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  return (
+    <AuthBox
+      title="Verify Your One Time Code (OTP)"
+      subtitle="Enter the six-digit code printed in the backend terminal. It expires in 2 minutes."
+    >
+      <form
+        className="mt-6 space-y-4"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setErr("");
+          setLoading(true);
+          try {
+            await auth.verify_reset_code({ email: email.trim(), code });
+            nav("/reset-password", { state: { email: email.trim() } });
+          } catch (error) {
+            setErr(error.message);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      >
+        {location.state?.message && (
+          <p className="text-sm text-green-700">{location.state.message}</p>
+        )}
+        <input
+          className={input}
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+        />
+        <input
+          className={input}
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          placeholder="Six-digit verification code"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          minLength={6}
+          maxLength={6}
+          pattern="[0-9]{6}"
+          required
+        />
+        <Error>{err}</Error>
+        <button className={`${primary} w-full`} type="submit" disabled={loading}>
+          {loading ? "Verifying..." : "Verify code"}
+        </button>
+      </form>
+    </AuthBox>
+  )
+}
+
 export function ResetPassword() {
   const nav = useNavigate();
-  const [e, setE] = useState(""),
-    [r, setR] = useState(""),
-    [p, setP] = useState(""),
-    [showPassword, setShowPassword] = useState(false),
-    [err, setErr] = useState("");
+  const location = useLocation();
+  const [email, setEmail] = useState(location.state?.email ?? "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
   return (
     <AuthBox
       title="Reset Your Password"
@@ -261,18 +324,25 @@ export function ResetPassword() {
     >
       <form
         className="mt-6 space-y-4"
-        onSubmit={async (x) => {
-          x.preventDefault();
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setErr("");
+          if (newPassword !== confirmPassword) {
+            setErr("Passwords do not match, please check!");
+            return;
+          }
+          setLoading(true);
           try {
-            const r = await auth.reset_password({
-              email: e,
-              reset_code: r,
-              password: p,
+            await auth.reset_password({
+              email: email.trim(),
+              new_password: newPassword,
+              confirm_password: confirmPassword,
             });
-            localStorage.setItem("token", r.access_token);
-            nav("/dashboard");
+            nav("/login", {replace: true});
           } catch (err) {
             setErr(err.message);
+          } finally {
+            setLoading(false);
           }
         }}
       >
@@ -280,34 +350,48 @@ export function ResetPassword() {
           className={input}
           type="email"
           placeholder="Email"
-          value={e}
-          onChange={(x) => setE(x.target.value)}
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          readOnly={Boolean(location.state?.email)}
           required
         />
-        <input
-          className={input}
-          placeholder="Please enter your reset code"
-          value={n}
-          onChange={(x) => setN(x.target.value)}
-          required
-        />
+
         <div className = "relative">
             <input
-            className={input}
-            type={showPassword ? "text" : "password"}
-            placeholder="Password"
-            value={p}
-            onChange={(x) => setP(x.target.value)}
-            required
+              className={input}
+              type={showNewPassword ? "text" : "password"}
+              placeholder="New Password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              minLength={6}
+              maxLength={128}
+              required
             />
-            <button type = "button" onClick={() => setShowPassword((prev) => !prev)} 
+            <button type = "button" onClick={() => setShowNewPassword((prev) => !prev)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500 hover:text-slate-950">
-                    {showPassword ? "Hide" : "Show"}
+                    {showNewPassword ? "Hide" : "Show"}
+            </button>
+        </div>
+
+        <div className = "relative">
+            <input
+              className={input}
+              type={showConfirmPassword ? "text" : "password"}
+              placeholder="Confirm New Password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              minLength={6}
+              maxLength={128}
+              required
+            />
+            <button type = "button" onClick={() => setShowConfirmPassword((prev) => !prev)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500 hover:text-slate-950">
+                    {showConfirmPassword ? "Hide" : "Show"}
             </button>
         </div>
         <Error>{err}</Error>
-        <button className={`${primary} w-full`} type="submit">
-          Submit
+        <button className={`${primary} w-full`} type="submit" disabled={loading}>
+          {loading ? "Updating password..." : "Submit"}
         </button>
       </form>
     </AuthBox>
@@ -406,9 +490,6 @@ export function Dashboard() {
           <Link className={secondary} to="/transactions">
             View history
           </Link>
-          <Link className={primary} to="/transfer">
-            Transfer money
-          </Link>
         </div>
       </PageTitle>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -430,7 +511,7 @@ export function Dashboard() {
             <Link className={`${secondary} text-center`} to="/withdrawal">
               Withdraw
             </Link>
-            <Link className={`${primary} text-center`} to="/transfer">
+            <Link className={`${secondary} text-center`} to="/transfer">
               Transfer
             </Link>
           </div>
@@ -449,6 +530,7 @@ function MoneyForm({ type }) {
   const [amount, setAmount] = useState(""),
     [msg, setMsg] = useState(""),
     [err, setErr] = useState("");
+    const navigate = useNavigate()
   return (
     <div className="mx-auto max-w-xl">
       <PageTitle
@@ -459,6 +541,13 @@ function MoneyForm({ type }) {
             : "Withdraw money from your wallet."
         }
       />
+      <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <label className="text-sm font-semibold text-slate-700">Amount</label>
         <input
@@ -515,12 +604,20 @@ export function Transfer() {
     [receiver, setReceiver] = useState(null),
     [msg, setMsg] = useState(""),
     [err, setErr] = useState("");
+    const navigate = useNavigate()
   return (
     <div className="mx-auto max-w-xl">
       <PageTitle
         title="Transfer money"
         description="Confirm the recipient before sending money."
       />
+      <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div>
           <label className="text-sm font-semibold text-slate-700">
@@ -623,6 +720,7 @@ export function Transactions() {
     [type, setType] = useState(""),
     [start, setStart] = useState(""),
     [end, setEnd] = useState("");
+    const navigate = useNavigate()
   const load = () => {
     const q = new URLSearchParams();
     if (type) q.set("transaction_type", type);
@@ -633,10 +731,18 @@ export function Transactions() {
   useEffect(load, []);
   return (
     <>
+      <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <PageTitle
         title="Transaction history"
         description="Your wallet statement, newest transactions first."
       />
+      
       <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row">
         <input
           className={input}
@@ -673,7 +779,7 @@ export function Transactions() {
           "status",
           "debit",
           "credit",
-          "running_balance",
+          "balance",
           "created_at",
         ]}
       />
@@ -683,6 +789,7 @@ export function Transactions() {
 
 export function AdminDashboard() {
   const [d, setD] = useState(null);
+  const navigate= useNavigate()
   useEffect(() => {
     api("/admin/dashboard").then(setD);
   }, []);
@@ -694,6 +801,13 @@ export function AdminDashboard() {
     );
   return (
     <>
+      <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <PageTitle
         title="Admin dashboard"
         description="System-wide wallet, ledger and reconciliation overview"
@@ -710,8 +824,8 @@ export function AdminDashboard() {
         <Link className={secondary} to="/admin/withdrawals">
           Pending withdrawals
         </Link>
-        <Link className={primary} to="/admin/transactions">
-          Transactions / reversal
+        <Link className={secondary} to="/admin/transactions">
+          Transactions
         </Link>
       </div>
     </>
@@ -719,10 +833,27 @@ export function AdminDashboard() {
 }
 export function AdminUsers() {
   const [rows, setRows] = useState([]);
-  const load = () => api("/admin/users").then(setRows);
-  useEffect(load, []);
+  const navigate = useNavigate()
+  const load = async () => {
+    try {
+      const data = await api("/admin/users");
+      setRows(data);
+    } catch(err) {
+      console.error("Failed to load users: ", err.message);
+    }
+  }
+  useEffect(() =>{
+    load()
+  }, []);
   return (
     <>
+      <button
+          type="button"
+          onClick={() => navigate("/admin")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <PageTitle
         title="Accounts"
         description="View balances and freeze or unfreeze accounts."
@@ -767,10 +898,27 @@ export function AdminUsers() {
 }
 export function AdminWithdrawals() {
   const [rows, setRows] = useState([]);
-  const load = () => api("/admin/withdrawals/pending").then(setRows);
-  useEffect(load, []);
+  const navigate = useNavigate()
+  const load = async () => {
+    try {
+    const data = await api("/admin/withdrawals/pending")
+    setRows(data);
+    } catch (err) {
+      console.log("Failed to load pending Withdrawals in admin tabs.", err.message)
+    }
+  }
+  useEffect(() => {
+    load()
+  }, []);
   return (
     <>
+    <button
+          type="button"
+          onClick={() => navigate("/admin")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <PageTitle
         title="Pending withdrawals"
         description="Approve or reject withdrawals above the configured approval threshold."
@@ -826,10 +974,27 @@ export function AdminWithdrawals() {
 }
 export function AdminTransactions() {
   const [rows, setRows] = useState([]);
-  const load = () => api("/admin/transactions").then(setRows);
-  useEffect(load, []);
+  const navigate = useNavigate()
+  const load = async () => {
+    try {
+    const data = await api("/admin/transactions")
+    setRows(data)
+    } catch(err) {
+      console.log("Failed to load User transactios in Admin panel", err.message)
+    };
+  };
+  useEffect(() => {
+    load();
+  }, []);
   return (
     <>
+    <button
+          type="button"
+          onClick={() => navigate("/admin")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
       <PageTitle
         title="All transactions"
         description="Review completed transactions and create reversals."
@@ -838,6 +1003,8 @@ export function AdminTransactions() {
         rows={rows}
         cols={[
           "reference_number",
+          "wallet number",
+          "full name",
           "transaction_type",
           "status",
           "amount",
