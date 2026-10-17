@@ -1,21 +1,20 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from decimal import Decimal
 
-
 class Settings(BaseSettings):
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/wallet_system"
-    )
-    jwt_secret_key: str = "Myib9yVb90VXbUMZyHRgS15YIisb-OhlpnZNqPwuHq92YpAWc1W2htUYiqN8FEvLNIGJ0-9Vg5VlF4fu6f28aA"
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
-    cors_origins: str = "http://localhost:5173"
-    currency: str = "BDT"
-    transfer_fee_fixed: Decimal = Decimal("0.00")
-    transfer_fee_percent: Decimal = Decimal("0.00")
-    daily_transfer_limit: Decimal = Decimal("100000.00")
-    withdrawal_approval_limit: Decimal = Decimal("50000.00")
+    database_url: str
+    jwt_secret_key: str
+    jwt_algorithm: str
+    access_token_expire_minutes: int
+    cors_origins: str
+    currency: str
+    transfer_fee_fixed: Decimal
+    transfer_fee_percent: Decimal
+    daily_transfer_limit: Decimal
+    withdrawal_approval_percentage: Decimal = Field(ge=0, le=100)
+    minimum_account_balance: Decimal = Field(ge=0)
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[3] / ".env",
         extra="ignore",

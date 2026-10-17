@@ -3,6 +3,17 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, auth } from "./services/api";
 import { useAuth } from "./context/AuthContext";
 import { IoIosArrowBack } from "react-icons/io";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
 const input =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-4 focus:ring-slate-100";
@@ -71,14 +82,21 @@ function Error({ children }) {
     </p>
   ) : null;
 }
-function Table({ rows, cols }) {
+function Table({ rows, cols, centeredCols = [] }) {
+  const centered = new Set(centeredCols);
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
           <tr>
             {cols.map((c) => (
-              <th key={c} className="whitespace-nowrap px-5 py-3 font-semibold">
+              <th
+                key={c}
+                className={`whitespace-nowrap px-5 py-3 font-semibold ${
+                  centered.has(c) ? "text-center" : ""
+                }`}
+              >
                 {c.replaceAll("_", " ")}
               </th>
             ))}
@@ -90,9 +108,11 @@ function Table({ rows, cols }) {
               {cols.map((c) => (
                 <td
                   key={c}
-                  className="whitespace-nowrap px-5 py-4 text-slate-700"
+                  className={`whitespace-nowrap px-5 py-4 text-slate-700 ${
+                    centered.has(c) ? "text-center" : ""
+                  }`}
                 >
-                  {String(r[c] ?? "")}
+                  {r[c] ?? ""}
                 </td>
               ))}
             </tr>
@@ -498,6 +518,12 @@ export function Dashboard() {
         <Card title="Today volume" value={`${d.today_volume} ${d.currency}`} />
         <Card title="Today transactions" value={d.today_count} />
       </div>
+      {d.status === "FROZEN" && (
+        <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Your wallet is frozen. You may deposit to restore the configured
+          minimum balance, then an admin can unfreeze it.
+        </p>
+      )}
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
           <h2 className="font-bold">Money movement</h2>
@@ -538,7 +564,7 @@ function MoneyForm({ type }) {
         description={
           type === "Deposit"
             ? "Add money through the system cash account."
-            : "Withdraw money from your wallet."
+            : "Large withdrawals and requests that use the minimum-balance reserve require admin approval."
         }
       />
       <button
@@ -827,6 +853,9 @@ export function AdminDashboard() {
         <Link className={secondary} to="/admin/transactions">
           Transactions
         </Link>
+        <Link className = {secondary} to ="/admin/history">
+          Admin Activity History
+        </Link>
       </div>
     </>
   );
@@ -852,7 +881,7 @@ export function AdminUsers() {
           onClick={() => navigate("/admin")}
           className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
         >
-            <IoIosArrowBack className = "text-lg"/> Back
+            <IoIosArrowBack className = "text-md"/> Back
       </button>
       <PageTitle
         title="Accounts"
@@ -861,52 +890,72 @@ export function AdminUsers() {
       <Table
         rows={rows.map((r) => ({
           ...r,
-          action: <button className={secondary}>Manage</button>,
-        }))}
-        cols={["wallet_number", "full_name", "email", "balance", "status"]}
-      />
-      {rows.length > 0 && (
-        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="space-y-2">
-            {rows.map((r) => (
-              <div
-                key={r.id}
-                className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 py-3 last:border-0"
+          status: (
+              <span
+                className={
+                  r.status === "ACTIVE"
+                    ? "font-semibold text-emerald-600"
+                    : "font-semibold text-amber-700"
+                }
               >
-                <span className="text-sm font-semibold">
-                  {r.wallet_number} · {r.full_name}
-                </span>
-                <button
-                  className={secondary}
-                  onClick={async () => {
+                {r.status}
+              </span>
+              
+          ), acc_edit: (
+          <button
+                className={`${secondary} px-3 py-2`}
+                onClick={async () => {
+                  try {
                     await api(
-                      `/admin/users/${r.id}/${r.status === "ACTIVE" ? "freeze" : "unfreeze"}`,
+                      `/admin/users/${r.id}/${r.status === "FROZEN" ? "unfreeze" : "freeze"}`,
                       { method: "POST" },
                     );
-                    load();
-                  }}
-                >
-                  {r.status === "ACTIVE" ? "Freeze" : "Unfreeze"}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+                    await load();
+                  } catch (err) {
+                    alert(err.message);
+                  }
+                }}
+              >
+                {r.status === "FROZEN" ? "Unfreeze" : "Freeze"}
+              </button>
+          )
+        }))}
+        cols={["wallet_number", "full_name", "email", "balance", "status", "acc_edit"]}
+      />
     </>
   );
 }
 export function AdminWithdrawals() {
   const [rows, setRows] = useState([]);
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
   const navigate = useNavigate()
   const load = async () => {
     try {
-    const data = await api("/admin/withdrawals/pending")
-    setRows(data);
+      const data = await api("/admin/withdrawals")
+      setRows(data);
+      setError("");
     } catch (err) {
-      console.log("Failed to load pending Withdrawals in admin tabs.", err.message)
+      setError(err.message);
     }
   }
+  const reviewWithdrawal = async (row, decision) => {
+    setBusyId(row.id);
+    setError("");
+    try {
+      await api(`/admin/withdrawals/${row.id}/${decision}`, {
+        method: "POST",
+        ...(decision === "reject" && {
+          body: JSON.stringify({ rejection_reason: "Rejected by admin" }),
+        }),
+      });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId("");
+    }
+  };
   useEffect(() => {
     load()
   }, []);
@@ -921,54 +970,47 @@ export function AdminWithdrawals() {
       </button>
       <PageTitle
         title="Pending withdrawals"
-        description="Approve or reject withdrawals above the configured approval threshold."
+        description="Requests at or above the configured percentage, or that use the minimum-balance reserve, require approval. Approval below the reserve freezes the wallet until the balance is restored and an admin unfreezes it."
       />
+      {error && (
+        <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </p>
+      )}
       <Table
-        rows={rows}
-        cols={["reference_number", "wallet_number", "amount", "status"]}
+        rows={rows.map((r) => ({
+          ...r,
+          approval: (
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              className="inline-flex min-w-24 items-center justify-center rounded-lg bg-white border border-emerald-400 text-black px-4 py-2 text-sm font-semibold hover:text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+              onClick={() => reviewWithdrawal(r, "approve")}
+            >
+              {busyId === r.id ? "Working..." : "Approve"}
+            </button>
+          ),
+          reject: (
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              className="inline-flex min-w-24 items-center justify-center rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition hover:border-red-300 hover:bg-red-800 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+              onClick={() => reviewWithdrawal(r, "reject")}
+            >
+              {busyId === r.id ? "Working..." : "Reject"}
+            </button>
+          ),
+        }))}
+        cols={[
+          "reference_number",
+          "wallet_number",
+          "amount",
+          "status",
+          "approval",
+          "reject"
+        ]}
+        centeredCols={["approval", "reject"]}
       />
-      <div className="mt-4 space-y-2">
-        {rows.map((r) => (
-          <div
-            key={r.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-          >
-            <div>
-              <p className="font-semibold">{r.reference_number}</p>
-              <p className="text-sm text-slate-500">
-                {r.wallet_number} · {r.amount}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                className={primary}
-                onClick={async () => {
-                  await api(`/admin/withdrawals/${r.id}/approve`, {
-                    method: "POST",
-                  });
-                  load();
-                }}
-              >
-                Approve
-              </button>
-              <button
-                className={secondary}
-                onClick={async () => {
-                  await api(`/admin/withdrawals/${r.id}/reject`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      rejection_reason: "Rejected by admin",
-                    }),
-                  });
-                  load();
-                }}
-              >
-                Reject
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
     </>
   );
 }
@@ -980,7 +1022,7 @@ export function AdminTransactions() {
     const data = await api("/admin/transactions")
     setRows(data)
     } catch(err) {
-      console.log("Failed to load User transactios in Admin panel", err.message)
+      console.log("Failed to load User transactions in Admin panel", err.message)
     };
   };
   useEffect(() => {
@@ -988,43 +1030,22 @@ export function AdminTransactions() {
   }, []);
   return (
     <>
-    <button
+      <button
           type="button"
           onClick={() => navigate("/admin")}
           className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
         >
-            <IoIosArrowBack className = "text-lg"/> Back
+        <IoIosArrowBack className = "text-lg"/> Back
       </button>
       <PageTitle
         title="All transactions"
         description="Review completed transactions and create reversals."
       />
       <Table
-        rows={rows}
-        cols={[
-          "reference_number",
-          "wallet number",
-          "full name",
-          "transaction_type",
-          "status",
-          "amount",
-          "fee",
-        ]}
-      />
-      <div className="mt-4 space-y-2">
-        {rows.map((r) => (
-          <div
-            key={r.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-          >
-            <div>
-              <p className="font-semibold">{r.reference_number}</p>
-              <p className="text-sm text-slate-500">
-                {r.transaction_type} · {r.status} · {r.amount}
-              </p>
-            </div>
-            {r.status === "COMPLETED" && (
-              <button
+        rows={rows.map((r) => ({
+          ...r,
+          reversal: (
+        <button
                 className={secondary}
                 onClick={async () => {
                   if (confirm(`Reverse ${r.reference_number}?`)) {
@@ -1040,11 +1061,19 @@ export function AdminTransactions() {
                 }}
               >
                 Reverse
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
+        </button>
+        )
+        }))}
+        cols={[
+          "reference_number",
+          "wallet_number",
+          "full_name",
+          "transaction_type",
+          "status",
+          "amount",
+          "reversal"
+        ]}
+      />
     </>
   );
 }

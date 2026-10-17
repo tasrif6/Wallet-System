@@ -45,11 +45,26 @@ async def get_wallet_account(db, wallet_id):
     return account
 
 
+async def pending_withdrawal_total(db, wallet_id):
+    return await db.scalar(
+        select(func.coalesce(func.sum(WithdrawalRequest.amount), 0)).where(
+            WithdrawalRequest.wallet_id == wallet_id,
+            WithdrawalRequest.status == WithdrawalStatus.PENDING,
+        )
+    ) or Decimal("0")
+
+
 async def deposit(db, user, amount):
     wallet = await get_wallet(db, user.id)
     cash = await cash_account(db)
     wa = await get_wallet_account(db, wallet.id)
-    if wallet.status == AccountStatus.FROZEN or user.status == AccountStatus.FROZEN:
+    if (
+        (
+            wallet.status == AccountStatus.FROZEN
+            or user.status == AccountStatus.FROZEN
+        )
+        and wallet.balance >= settings.minimum_account_balance
+    ):
         raise HTTPException(403, "Account is frozen")
     tx = Transaction(
         reference_number=ref("DEP"),
@@ -72,15 +87,24 @@ async def deposit(db, user, amount):
     return tx, wallet
 
 
-async def withdrawal(db, user, amount, admin_override=False):
+async def withdrawal(db, user, amount):
     wallet = await get_wallet(db, user.id)
     wa = await get_wallet_account(db, wallet.id)
     cash = await cash_account(db)
     if wallet.status == AccountStatus.FROZEN or user.status == AccountStatus.FROZEN:
         raise HTTPException(403, "Account is frozen")
-    if wallet.balance < amount:
-        raise HTTPException(400, "Insufficient balance")
-    pending = amount > settings.withdrawal_approval_limit and not admin_override
+    available_balance = wallet.balance - await pending_withdrawal_total(db, wallet.id)
+    if available_balance < amount:
+        raise HTTPException(
+            400, "Insufficient available balance after pending withdrawals"
+        )
+    pending = (
+        amount
+        >= wallet.balance
+        * settings.withdrawal_approval_percentage
+        / Decimal("100")
+        or available_balance - amount < settings.minimum_account_balance
+    )
     tx = Transaction(
         reference_number=ref("WDR"),
         transaction_type=TransactionType.WITHDRAWAL,
@@ -162,8 +186,19 @@ async def transfer(db, user, receiver_number, amount, note, idempotency_key):
         raise HTTPException(403, "Sender or receiver account is frozen")
     fee = fee_for(amount)
     total = amount + fee
-    if sender.balance < total:
-        raise HTTPException(400, "Insufficient balance including transfer fee")
+    reserved_withdrawals = await pending_withdrawal_total(db, sender.id)
+    if sender.balance - reserved_withdrawals < total:
+        raise HTTPException(
+            400,
+            "Insufficient available balance after pending withdrawals and transfer fee",
+        )
+    if (
+        sender.balance - reserved_withdrawals - total
+        < settings.minimum_account_balance
+    ):
+        raise HTTPException(
+            400, "Transfers must leave the minimum account balance in your wallet"
+        )
     start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
     )

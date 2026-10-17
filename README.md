@@ -27,6 +27,7 @@ Local PostgreSQL
 
 - User registration/login, User/Admin roles, one wallet per user, unique WAL wallet numbers.
 - Freeze/unfreeze accounts.
+- Wallets need a minimum balance of 1,000 Tk to remain active. Withdrawals at or above 90% of the current balance, or that would use this reserve, require admin approval. An approved withdrawal below the minimum freezes the wallet. Deposits remain allowed, and an admin can unfreeze it after the minimum balance is restored.
 - Deposit with Cash In/Out system account.
 - Immediate and approval-required withdrawals.
 - Receiver lookup and transfer confirmation.
@@ -43,7 +44,7 @@ Local PostgreSQL
 
 ## Business configuration
 
-The task file does not specify exact values for transfer fees, daily transfer limits, withdrawal approval threshold, or currency. These are environment configuration values in the repository-root `.env`, which is shared by the backend and frontend development server.
+The repository-root `.env` configures transfer fees, daily transfer limits, the withdrawal approval percentage, minimum account balance, and currency. The backend loads these values from that file; it is shared by the backend and frontend development server.
 
 ## Setup
 

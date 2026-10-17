@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.models import *
 from app.schemas import *
 from app.core.deps import current_user, active_user, admin_user
+from app.core.config import settings
 from app.core.security import hash_password, verify_password, create_access_token
 from app.services.money_service import (
     ref,
@@ -41,7 +42,11 @@ async def register(data: RegisterIn, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.flush()
     seq = await db.scalar(select(func.nextval("wallet_number_seq")))
-    wallet = Wallet(user_id=user.id, wallet_number=f"WAL-{seq}", currency="BDT")
+    wallet = Wallet(
+        user_id=user.id,
+        wallet_number=f"WAL-{seq}",
+        currency="BDT",
+    )
     db.add(wallet)
     await db.flush()
     db.add(
@@ -159,7 +164,7 @@ async def wallet(user=Depends(current_user), db: AsyncSession = Depends(get_db))
 
 @router.post("/deposits", response_model=DepositOut)
 async def make_deposit(
-    data: AmountIn, user=Depends(active_user), db: AsyncSession = Depends(get_db)
+    data: AmountIn, user=Depends(current_user), db: AsyncSession = Depends(get_db)
 ):
     try:
         user_id = user.id
@@ -392,6 +397,7 @@ async def dashboard(user=Depends(current_user), db: AsyncSession = Depends(get_d
         balance=wallet.balance,
         wallet_number=wallet.wallet_number,
         currency=wallet.currency,
+        status=wallet.status.value,
         today_count=len(rows),
         today_volume=deposits + withdrawals + transfers + fees,
         deposits=deposits,
@@ -548,9 +554,13 @@ async def unfreeze(
         )
         if not u or not w:
             raise HTTPException(404, "User not found")
+        if w.balance < settings.minimum_account_balance:
+            raise HTTPException(
+                400, "Wallet balance is below the minimum required to unfreeze"
+            )
         u.status = AccountStatus.ACTIVE
         w.status = AccountStatus.ACTIVE
-    return {"status": "ACTIVE"}
+    return {"status": AccountStatus.ACTIVE.value}
 
 
 @router.get("/admin/withdrawals")
@@ -561,7 +571,7 @@ async def pending_withdrawals(
         await db.execute(
             select(WithdrawalRequest, Transaction, User, Wallet)
             .join(Transaction, WithdrawalRequest.transaction_id == Transaction.id)
-            .join(User, WithdrawalRequest.id == User.id)
+            .join(User, WithdrawalRequest.requested_by == User.id)
             .join(Wallet, WithdrawalRequest.wallet_id == Wallet.id)
             .where(WithdrawalRequest.status == WithdrawalStatus.PENDING)
             .order_by(WithdrawalRequest.created_at)
@@ -574,6 +584,7 @@ async def pending_withdrawals(
             "email": u.email,
             "wallet_number": wa.wallet_number,
             "amount": w.amount,
+            "status": w.status.value,
             "created_at": w.created_at,
         }
         for w, t, u, wa in rows
@@ -584,6 +595,7 @@ async def pending_withdrawals(
 async def approve_withdrawal(
     withdrawal_id: str, admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
+    admin_id = admin.id
     await db.rollback()
     async with db.begin():
         wr = await db.get(WithdrawalRequest, withdrawal_id, with_for_update=True)
@@ -593,15 +605,27 @@ async def approve_withdrawal(
         wallet = await db.get(Wallet, wr.wallet_id, with_for_update=True)
         wa = await get_wallet_account(db, wallet.id)
         cash = await cash_account(db)
-        if wallet.status == AccountStatus.FROZEN or wallet.balance < wr.amount:
+        user = await db.get(User, wallet.user_id, with_for_update=True)
+        if (
+            wallet.status == AccountStatus.FROZEN
+            or user.status == AccountStatus.FROZEN
+            or wallet.balance < wr.amount
+        ):
             raise HTTPException(400, "Withdrawal cannot be approved")
         add_entry(db, tx.id, wa.id, EntryType.DEBIT, wr.amount)
         add_entry(db, tx.id, cash.id, EntryType.CREDIT, wr.amount)
         wallet.balance -= wr.amount
+        status = (
+            AccountStatus.FROZEN
+            if wallet.balance < settings.minimum_account_balance
+            else AccountStatus.ACTIVE
+        )
+        wallet.status = status
+        user.status = status
         tx.status = TransactionStatus.COMPLETED
         tx.completed_at = datetime.now(timezone.utc)
         wr.status = WithdrawalStatus.COMPLETED
-        wr.reviewed_by = admin.id
+        wr.reviewed_by = admin_id
         wr.reviewed_at = datetime.now(timezone.utc)
     return {"status": "COMPLETED", "reference_number": tx.reference_number}
 
@@ -613,6 +637,7 @@ async def reject_withdrawal(
     admin=Depends(admin_user),
     db: AsyncSession = Depends(get_db),
 ):
+    admin_id = admin.id
     await db.rollback()
     async with db.begin():
         wr = await db.get(WithdrawalRequest, withdrawal_id, with_for_update=True)
@@ -621,7 +646,7 @@ async def reject_withdrawal(
         tx = await db.get(Transaction, wr.transaction_id, with_for_update=True)
         tx.status = TransactionStatus.REJECTED
         wr.status = WithdrawalStatus.REJECTED
-        wr.reviewed_by = admin.id
+        wr.reviewed_by = admin_id
         wr.reviewed_at = datetime.now(timezone.utc)
         wr.rejection_reason = data.rejection_reason
     return {"status": "REJECTED"}
@@ -652,13 +677,15 @@ async def reverse(
             .scalars()
             .all()
         )
-        wallets = []
+        wallets = {}
         for e in entries:
             a = await db.get(Account, e.account_id)
             if a.wallet_id:
-                wallets.append(a.wallet_id)
-        for wid in sorted(set(wallets), key=str):
-            await db.scalar(select(Wallet).where(Wallet.id == wid).with_for_update())
+                wallets[a.wallet_id] = None
+        for wid in sorted(wallets, key=str):
+            wallets[wid] = await db.scalar(
+                select(Wallet).where(Wallet.id == wid).with_for_update()
+            )
         rev = Transaction(
             reference_number=ref("REV"),
             transaction_type=TransactionType.REVERSAL,
@@ -688,6 +715,15 @@ async def reverse(
                     if w.balance < e.amount:
                         raise HTTPException(400, "Reversal would make wallet negative")
                     w.balance -= e.amount
+        for wallet in wallets.values():
+            user = await db.get(User, wallet.user_id, with_for_update=True)
+            if (
+                wallet.status != AccountStatus.FROZEN
+                and user.status != AccountStatus.FROZEN
+                and wallet.balance < settings.minimum_account_balance
+            ):
+                wallet.status = AccountStatus.FROZEN
+                user.status = AccountStatus.FROZEN
     return {
         "reference_number": rev.reference_number,
         "reversed_transaction": original.reference_number,
@@ -699,14 +735,19 @@ async def admin_transactions(
     admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
     rows = (
-        (await db.execute(select(Transaction).order_by(desc(Transaction.created_at))))
-        .scalars()
-        .all()
+        await db.execute(
+            select(Transaction, User.full_name, Wallet.wallet_number)
+            .join(User, User.id == Transaction.initiated_by)
+            .outerjoin(Wallet, Wallet.user_id == User.id)
+            .order_by(desc(Transaction.created_at))
+        )
     )
     return [
         {
             "id": str(t.id),
             "reference_number": t.reference_number,
+            "wallet_number": wallet_number,
+            "full_name": full_name,
             "transaction_type": t.transaction_type.value,
             "status": t.status.value,
             "amount": t.amount,
@@ -715,9 +756,12 @@ async def admin_transactions(
             "created_at": t.created_at,
             "reversal_of": str(t.reversal_of) if t.reversal_of else None,
         }
-        for t in rows
+        for t, full_name, wallet_number in rows
     ]
 
+@router.post("/admin/history")
+async def admin_history(admin= Depends(admin_user), db: AsyncSession=Depends(get_db), date: str | None = Query(default=None)):
+    pass
 
 @router.get("/admin/reports/daily-summary")
 async def daily_summary(

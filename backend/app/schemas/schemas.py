@@ -135,6 +135,7 @@ class DashboardOut(BaseModel):
     balance: Decimal
     wallet_number: str
     currency: str
+    status: str
     today_count: int
     today_volume: Decimal
     deposits: Decimal
