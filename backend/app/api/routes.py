@@ -854,11 +854,11 @@ async def admin_transactions(
 
         query = query.where(
             or_(
-                Transaction.reference_number.ilike(pattern),
-                User.full_name.ilike(pattern),
+                # Transaction.reference_number.ilike(pattern),
+                # User.full_name.ilike(pattern),
                 Wallet.wallet_number.ilike(pattern),
-                cast(Transaction.transaction_type, String).ilike(pattern),
-                cast(Transaction.status, String).ilike(pattern),
+                # cast(Transaction.transaction_type, String).ilike(pattern),
+                # cast(Transaction.status, String).ilike(pattern),
             )
         )
 
