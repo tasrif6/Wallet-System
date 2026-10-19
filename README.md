@@ -44,7 +44,11 @@ Local PostgreSQL
 
 ## Business configuration
 
+<<<<<<< HEAD
 The repository-root `.env` configures transfer fees, daily transfer limits, the withdrawal approval percentage, minimum account balance, and currency. The backend loads these values from that file; it is shared by the backend and frontend development server.
+=======
+The task file does not specify exact values for transfer fees, daily transfer limits, withdrawal approval threshold, or currency. These are environment configuration values in the repository-root `.env`, which is shared by the backend and frontend development server.
+>>>>>>> ed6507eac0c31efb2a395df95287612163cde8b0
 
 ## Setup
 
