@@ -3,17 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, auth } from "./services/api";
 import { useAuth } from "./context/AuthContext";
 import { IoIosArrowBack } from "react-icons/io";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
+
 
 const input =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-4 focus:ring-slate-100";
@@ -37,9 +27,19 @@ function PageTitle({ title, description, children }) {
     </div>
   );
 }
-function Card({ title, value, hint }) {
+function Card({ title, value, hint, href, className="" }) {
+  const navigate = useNavigate();
+  const go = () => href && navigate(href);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div
+      onClick={go}
+      onKeyDown={(e) => e.key === "Enter" && go()}
+      role={href ? "link" : undefined}
+      tabIndex={href ? 0 : undefined}
+      className={`rounded-xl border bg-white p-4 shadow-sm ${
+        href ? "cursor-pointer hover:shadow-md transition" : ""
+      } ${className}`}
+      >      
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {title}
       </p>
@@ -546,10 +546,75 @@ export function Dashboard() {
           title="Pending withdrawals"
           value={d.pending_withdrawals}
           hint="Waiting for admin approval"
+          href="/dashboard/pending-withdrawals"
+          className = "cursor-pointer"
         />
       </div>
     </>
   );
+}
+
+export function PendingWithdrawals(){
+  const [items,setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState("")
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load(){
+      try {
+        const data = await api("/withdrawals")
+        if (!cancelled) {
+          setItems(data.filter((item) => item.status === "PENDING"))
+          setErr("")
+        }
+      } catch (err) {
+        if (!cancelled) setErr(err.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <div>
+      <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+            <IoIosArrowBack className = "text-lg"/> Back
+      </button>
+      <PageTitle
+        title="My pending withdrawals"
+        description="Withdrawal requests waiting for admin approval."
+      />
+      <Error>{err}</Error>
+      {loading ? (
+        <p className="py-8 text-center text-sm text-slate-500">
+          Loading pending withdrawals...
+        </p>
+      ) : (
+        <Table
+          rows={items.map((item) => ({
+            ...item,
+            amount: `${item.amount} BDT`,
+            created_at: item.created_at
+              ? new Date(item.created_at).toLocaleString()
+              : "",
+          }))}
+          cols={["reference_number", "amount", "status", "created_at"]}
+        />
+      )}
+    </div>
+  )
 }
 
 function MoneyForm({ type }) {
@@ -862,18 +927,24 @@ export function AdminDashboard() {
 }
 export function AdminUsers() {
   const [rows, setRows] = useState([]);
+  const [search, setSearch] = useState("");
+  const [err, setErr] = useState("");
   const navigate = useNavigate()
   const load = async () => {
     try {
-      const data = await api("/admin/users");
-      setRows(data);
-    } catch(err) {
-      console.error("Failed to load users: ", err.message);
+      const params = new URLSearchParams()
+      if (search.trim()) params.set("search", search.trim());
+      const query = params.toString();
+      const result = await api(`/admin/users${query ? `?${query}` : ""}`);
+      setRows(result);
+      setErr("");
+    } catch (err) {
+      setErr(err.message);
     }
   }
   useEffect(() =>{
     load()
-  }, []);
+  }, [search]);
   return (
     <>
       <button
@@ -887,6 +958,19 @@ export function AdminUsers() {
         title="Accounts"
         description="View balances and freeze or unfreeze accounts."
       />
+      <Error>{err}</Error>
+      <div className = "m-2">
+        {/* <label className = "min-w-56 flex-1 text-sm font-medium text-slate-700"> */}
+            
+            <input className ={`${input} mt-1 w-full`}
+              type = "search"
+              placeholder = "Search by name, email, or wallet number"
+              value = {search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+              }}/>
+          {/* </label> */}
+      </div>
       <Table
         rows={rows.map((r) => ({
           ...r,
@@ -970,7 +1054,7 @@ export function AdminWithdrawals() {
       </button>
       <PageTitle
         title="Pending withdrawals"
-        description="Requests at or above the configured percentage, or that use the minimum-balance reserve, require approval. Approval below the reserve freezes the wallet until the balance is restored and an admin unfreezes it."
+        description="Requests at or above 90 percentage require approval. Minimum amount of 1000tk is needed for the account to stay active."
       />
       {error && (
         <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1016,18 +1100,23 @@ export function AdminWithdrawals() {
 }
 export function AdminTransactions() {
   const [rows, setRows] = useState([]);
+  const [search, setSearch] = useState("");
+  const [err, setErr] = useState("");
   const navigate = useNavigate()
   const load = async () => {
     try {
-    const data = await api("/admin/transactions")
-    setRows(data)
-    } catch(err) {
-      console.log("Failed to load User transactions in Admin panel", err.message)
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("search", search.trim());
+    const result = await api(`/admin/transactions?${params.toString()}`);
+    setRows(result);
+    setErr("");
+    } catch (err) {
+      setErr(err.message);
     };
   };
   useEffect(() => {
-    load();
-  }, []);
+    load()
+  }, [search]);
   return (
     <>
       <button
@@ -1041,6 +1130,19 @@ export function AdminTransactions() {
         title="All transactions"
         description="Review completed transactions and create reversals."
       />
+      <Error>{err}</Error>
+      <div className = "m-2">
+        {/* <label className = "min-w-56 flex-1 text-sm font-medium text-slate-700"> */}
+            
+            <input className ={`${input} mt-1 w-full`}
+              type = "search"
+              placeholder = "Search by wallet number"
+              value = {search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+              }}/>
+          {/* </label> */}
+      </div>
       <Table
         rows={rows.map((r) => ({
           ...r,
@@ -1074,6 +1176,163 @@ export function AdminTransactions() {
           "reversal"
         ]}
       />
+    </>
+  );
+}
+
+export function AdminActivity() {
+  const [items, setItems] = useState([]);
+  const [err, setErr] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const pageSize = 20;
+  const navigate = useNavigate()
+  const load = async () => {
+    setLoading(true);
+    setErr("");
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+      });
+      if (startDate) params.set("start_date", startDate);
+      if (endDate) params.set("end_date", endDate);
+      if (search.trim()) params.set("search", search.trim());      const result = await api(`/admin/history?${params.toString()}`);
+      setItems(result.items ?? []);
+      setTotal(result.total ?? 0);
+    } catch (error) {
+      setErr(error.message || "Failed to load admin activity");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [startDate, endDate, search, page]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const rows = items.map((item) => ({
+    ...item,
+    created_at: new Date(item.created_at).toLocaleString(),
+  }));
+
+  return (
+    <>
+      <button
+          type="button"
+          onClick={() => navigate("/admin")}
+          className="flex items-center justify-center gap-1 m-2 p-2 rounded-xl text-sm hover:bg-gray-100 transition"
+        >
+        <IoIosArrowBack className = "text-lg"/> Back
+      </button>
+      <PageTitle
+        title="Admin Activities"
+        description="Review administrative actions recorded in the activity log."
+      />
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="text-sm font-medium text-slate-700">
+          Start Date
+            <input
+              className={`${input} mt-1`}
+              type="date"
+              value={startDate}
+              max={endDate || undefined}
+              onChange={(event) => {
+                setPage(1);
+                setStartDate(event.target.value);
+              }}
+            />
+          </label>
+          <label className ="text-sm font-medium text-slate-700">
+            End Date
+            <input
+              className={`${input} mt-1`}
+              type="date"
+              value={endDate}
+              min={startDate || undefined}
+              onChange={(event) => {
+                setPage(1);
+                setEndDate(event.target.value);
+              }}
+            />
+          </label>
+          <label className = "min-w-56 flex-1 text-sm font-medium text-slate-700">
+            Search activity
+            <input className ={`${input} mt-1 w-full`}
+              type = "search"
+              placeholder = "Search by wallet number"
+              value = {search}
+              onChange={(event) => {
+                setPage(1);
+                setSearch(event.target.value);
+              }}/>
+          </label>
+        <button className={secondary} type="button" onClick={load}>
+          Refresh
+        </button>
+      </div>
+      {err && (
+        <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {err}
+        </p>
+      )}
+      {loading ? (
+        <p className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+          Loading activity history...
+        </p>
+      ) : (
+        <Table
+          rows={rows}
+        cols={[
+          "id",
+          "admin_id",
+          "wallet_number",
+          "users_name",
+          "action",
+          "target_type",
+          "users_email",
+          "status",
+          "description",
+          "created_at"
+        ]}
+        />
+      )}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+        <span>
+          {total === 0
+            ? "No activity records"
+            : `Showing ${(page - 1) * pageSize + 1}–${Math.min(
+                page * pageSize,
+                total,
+              )} of ${total}`}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            className={secondary}
+            type="button"
+            disabled={page <= 1 || loading}
+            onClick={() => setPage((current) => current - 1)}
+          >
+            Previous
+          </button>
+          <span>
+            Page {page} of {totalPages}
+          </span>
+          <button
+            className={secondary}
+            type="button"
+            disabled={page >= totalPages || loading}
+            onClick={() => setPage((current) => current + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </>
   );
 }

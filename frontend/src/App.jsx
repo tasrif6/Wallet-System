@@ -15,6 +15,8 @@ import {
   AdminUsers,
   AdminWithdrawals,
   AdminTransactions,
+  AdminActivity,
+  PendingWithdrawals,
 } from "./pages";
 
 function Guard({ children, admin = false }) {
@@ -141,6 +143,16 @@ export default function App() {
           </Guard>
         }
       />
+      <Route 
+        path="/dashboard/pending-withdrawals" 
+        element={
+          <Guard>
+            <Layout>
+              <PendingWithdrawals />
+            </Layout>
+          </Guard>
+        }
+        />
       <Route
         path="/admin"
         element={
@@ -177,6 +189,16 @@ export default function App() {
           <Guard admin>
             <Layout>
               <AdminTransactions />
+            </Layout>
+          </Guard>
+        }
+      />
+      <Route
+        path="/admin/history"
+        element={
+          <Guard admin>
+            <Layout>
+              <AdminActivity />
             </Layout>
           </Guard>
         }

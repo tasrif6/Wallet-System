@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date as Date, time
 from decimal import Decimal
+from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import select, func, desc, text
+from sqlalchemy import select, func, desc, or_, cast, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.models import *
@@ -25,9 +26,33 @@ from app.services.ledger_service import (
 )
 
 import secrets
-from app.models import User
+from app.models import User, AdminActivityLog
 
 router = APIRouter()
+
+
+def log_admin_activity(
+    db: AsyncSession,
+    admin_id: UUID,
+    affected_user: User,
+    action: str,
+    target_type: str,
+    wallet_number: str,
+    description: str,
+):
+    db.add(
+        AdminActivityLog(
+            admin_id=admin_id,
+            wallet_number=wallet_number,
+            users_name=affected_user.full_name,
+            users_email=affected_user.email,
+            action=action,
+            target_type=target_type,
+            status="SUCCESS",
+            description=description,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
 
 
 @router.post("/auth/register", response_model=AuthOut)
@@ -503,14 +528,28 @@ async def admin_dashboard(
 
 
 @router.get("/admin/users")
-async def admin_users(admin=Depends(admin_user), db: AsyncSession = Depends(get_db)):
-    rows = (
-        await db.execute(
+async def admin_users(admin=Depends(admin_user), db: AsyncSession = Depends(get_db),     
+                search: str | None = Query(default = None, max_length =100)
+):
+
+    query = (
             select(User, Wallet)
             .join(Wallet, Wallet.user_id == User.id)
-            .order_by(User.created_at)
         )
-    ).all()
+    term = search.strip() if search else ""
+        
+    if term:
+        pattern = f"%{term}%"
+        query = query.where(
+            or_(
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern),
+                Wallet.wallet_number.ilike(pattern),
+            )
+        )
+
+    query = query.order_by(asc(User.full_name))
+    rows = (await db.execute(query)).all()
     return [
         {
             "id": str(u.id),
@@ -529,6 +568,7 @@ async def admin_users(admin=Depends(admin_user), db: AsyncSession = Depends(get_
 async def freeze(
     user_id: str, admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
+    admin_id = admin.id
     await db.rollback()
     async with db.begin():
         u = await db.get(User, user_id, with_for_update=True)
@@ -539,6 +579,15 @@ async def freeze(
             raise HTTPException(404, "User not found")
         u.status = AccountStatus.FROZEN
         w.status = AccountStatus.FROZEN
+        log_admin_activity(
+            db,
+            admin_id,
+            u,
+            "FREEZE_ACCOUNT",
+            "USER",
+            w.wallet_number,
+            f"Froze account {u.email}",
+        )
     return {"status": "FROZEN"}
 
 
@@ -546,6 +595,7 @@ async def freeze(
 async def unfreeze(
     user_id: str, admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
 ):
+    admin_id = admin.id
     await db.rollback()
     async with db.begin():
         u = await db.get(User, user_id, with_for_update=True)
@@ -560,6 +610,15 @@ async def unfreeze(
             )
         u.status = AccountStatus.ACTIVE
         w.status = AccountStatus.ACTIVE
+        log_admin_activity(
+            db,
+            admin_id,
+            u,
+            "UNFREEZE_ACCOUNT",
+            "USER",
+            w.wallet_number,
+            f"Unfroze account {u.email}",
+        )
     return {"status": AccountStatus.ACTIVE.value}
 
 
@@ -606,6 +665,8 @@ async def approve_withdrawal(
         wa = await get_wallet_account(db, wallet.id)
         cash = await cash_account(db)
         user = await db.get(User, wallet.user_id, with_for_update=True)
+        if not user:
+            raise HTTPException(404, "User not found")
         if (
             wallet.status == AccountStatus.FROZEN
             or user.status == AccountStatus.FROZEN
@@ -627,6 +688,15 @@ async def approve_withdrawal(
         wr.status = WithdrawalStatus.COMPLETED
         wr.reviewed_by = admin_id
         wr.reviewed_at = datetime.now(timezone.utc)
+        log_admin_activity(
+            db,
+            admin_id,
+            user,
+            "APPROVE_WITHDRAWAL",
+            "WITHDRAWAL",
+            wallet.wallet_number,
+            f"Approved withdrawal {tx.reference_number}",
+        )
     return {"status": "COMPLETED", "reference_number": tx.reference_number}
 
 
@@ -644,11 +714,26 @@ async def reject_withdrawal(
         if not wr or wr.status != WithdrawalStatus.PENDING:
             raise HTTPException(400, "Withdrawal is not pending")
         tx = await db.get(Transaction, wr.transaction_id, with_for_update=True)
+        wallet = await db.get(Wallet, wr.wallet_id)
+        if not wallet:
+            raise HTTPException(404, "Wallet not found")
+        user = await db.get(User, wallet.user_id)
+        if not user:
+            raise HTTPException(404, "User not found")
         tx.status = TransactionStatus.REJECTED
         wr.status = WithdrawalStatus.REJECTED
         wr.reviewed_by = admin_id
         wr.reviewed_at = datetime.now(timezone.utc)
         wr.rejection_reason = data.rejection_reason
+        log_admin_activity(
+            db,
+            admin_id,
+            user,
+            "REJECT_WITHDRAWAL",
+            "WITHDRAWAL",
+            wallet.wallet_number,
+            f"Rejected withdrawal {tx.reference_number}",
+        )
     return {"status": "REJECTED"}
 
 
@@ -686,6 +771,11 @@ async def reverse(
             wallets[wid] = await db.scalar(
                 select(Wallet).where(Wallet.id == wid).with_for_update()
             )
+        affected_wallets = [
+            wallets[wid] for wid in sorted(wallets, key=str) if wallets[wid]
+        ]
+        if not affected_wallets:
+            raise HTTPException(400, "Transaction has no associated wallet")
         rev = Transaction(
             reference_number=ref("REV"),
             transaction_type=TransactionType.REVERSAL,
@@ -715,8 +805,12 @@ async def reverse(
                     if w.balance < e.amount:
                         raise HTTPException(400, "Reversal would make wallet negative")
                     w.balance -= e.amount
-        for wallet in wallets.values():
+        affected_users = []
+        for wallet in affected_wallets:
             user = await db.get(User, wallet.user_id, with_for_update=True)
+            if not user:
+                raise HTTPException(404, "User not found")
+            affected_users.append((user, wallet))
             if (
                 wallet.status != AccountStatus.FROZEN
                 and user.status != AccountStatus.FROZEN
@@ -724,6 +818,16 @@ async def reverse(
             ):
                 wallet.status = AccountStatus.FROZEN
                 user.status = AccountStatus.FROZEN
+        for user, wallet in affected_users:
+            log_admin_activity(
+                db,
+                admin_id,
+                user,
+                "REVERSE_TRANSACTION",
+                "TRANSACTION",
+                wallet.wallet_number,
+                f"Reversed transaction {original.reference_number}",
+            )
     return {
         "reference_number": rev.reference_number,
         "reversed_transaction": original.reference_number,
@@ -732,16 +836,35 @@ async def reverse(
 
 @router.get("/admin/transactions")
 async def admin_transactions(
-    admin=Depends(admin_user), db: AsyncSession = Depends(get_db)
+    admin=Depends(admin_user), db: AsyncSession = Depends(get_db),
+    search: str | None = Query(default = None, max_length =100)
 ):
-    rows = (
-        await db.execute(
+    query = (
             select(Transaction, User.full_name, Wallet.wallet_number)
             .join(User, User.id == Transaction.initiated_by)
             .outerjoin(Wallet, Wallet.user_id == User.id)
             .order_by(desc(Transaction.created_at))
-        )
     )
+    # print('Admin transaction query: ', {query})
+
+    term = search.strip() if search else ""
+
+    if term:
+        pattern = f"%{term}%"
+
+        query = query.where(
+            or_(
+                Transaction.reference_number.ilike(pattern),
+                User.full_name.ilike(pattern),
+                Wallet.wallet_number.ilike(pattern),
+                cast(Transaction.transaction_type, String).ilike(pattern),
+                cast(Transaction.status, String).ilike(pattern),
+            )
+        )
+
+    query = query.order_by(desc(Transaction.created_at))
+
+    rows = (await db.execute(query)).all()
     return [
         {
             "id": str(t.id),
@@ -759,9 +882,91 @@ async def admin_transactions(
         for t, full_name, wallet_number in rows
     ]
 
-@router.post("/admin/history")
-async def admin_history(admin= Depends(admin_user), db: AsyncSession=Depends(get_db), date: str | None = Query(default=None)):
-    pass
+@router.get("/admin/history")
+async def admin_history(
+    admin=Depends(admin_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: Date | None = Query(default=None),
+    end_date: Date | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+):
+    filters = []
+
+    # Inclusive start date.
+    if start_date:
+        start = datetime.combine(
+            start_date, time.min, tzinfo=timezone.utc
+        )
+        filters.append(AdminActivityLog.created_at >= start)
+
+    # Inclusive end date, implemented as an exclusive next-day boundary.
+    if end_date:
+        end = datetime.combine(
+            end_date + timedelta(days=1),
+            time.min,
+            tzinfo=timezone.utc,
+        )
+        filters.append(AdminActivityLog.created_at < end)
+
+    # Search across the fields available in the activity-log model.
+    term = search.strip() if search else ""
+    if term:
+        pattern = f"%{term}%"
+        filters.append(
+            
+                # AdminActivityLog.users_name.ilike(pattern),
+                # AdminActivityLog.users_email.ilike(pattern),
+                AdminActivityLog.wallet_number.ilike(pattern),
+                # AdminActivityLog.action.ilike(pattern),
+                # AdminActivityLog.target_type.ilike(pattern),
+                # AdminActivityLog.description.ilike(pattern),
+        )
+
+    # Total matching records
+    count_query = (
+        select(func.count())
+        .select_from(AdminActivityLog)
+        .where(*filters)
+    )
+
+    total = await db.scalar(count_query)
+
+    query = (
+        select(AdminActivityLog)
+        .where(*filters)
+        .order_by(
+            AdminActivityLog.created_at.desc(),
+            AdminActivityLog.id.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    return {
+        "items": [
+            {
+                "id": str(log.id),
+                "admin_id": str(log.admin_id),
+                "wallet_number": log.wallet_number,
+                "users_name": log.users_name,
+                "action": log.action,
+                "target_type": log.target_type,
+                "users_email": log.users_email,
+                "status": log.status,
+                "description": log.description,
+                "created_at": log.created_at.isoformat(),
+            }
+            for log in rows
+        ],
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+    }
+
 
 @router.get("/admin/reports/daily-summary")
 async def daily_summary(
