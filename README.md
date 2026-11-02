@@ -26,11 +26,14 @@ Local PostgreSQL
 ## Included task features
 
 - User registration/login, User/Admin roles, one wallet per user, unique WAL wallet numbers.
+- Forgot password added with OTP send and verification feature.
+- Password requirement before every transactions.
 - Freeze/unfreeze accounts.
 - Deposit with Cash In/Out system account.
 - Immediate and approval-required withdrawals.
 - Receiver lookup and transfer confirmation.
 - Transfer fee and daily transfer limit are configurable.
+- Withdrawal fee 10tk on every 1000tk added.
 - Idempotency-Key handling for transfers.
 - PostgreSQL row locking for transfers and wallet operations.
 - Double-entry ledger and transaction atomicity.
@@ -40,6 +43,13 @@ Local PostgreSQL
 - Admin dashboard, account management, pending withdrawals, all transactions.
 - Reversal with a new linked reversal transaction and double-reversal prevention.
 - Trial balance, daily summary, and reconciliation endpoints.
+- Pay Bill in multiple sectors.
+- Statement download option with password protection.
+- Search option added at every panels.
+- Dark mode added.
+- User profile upon hover added.
+- Bar chart added in the dashboard.
+  
 
 ## Business configuration
 
@@ -73,6 +83,3 @@ For password recovery, submit the account email on the Forgot Password page and 
 
 Change the local development credentials before using the project outside local development.
 
-## Scope note
-
-Testing is intentionally not included yet, per the project decision. The task's testing cases remain the target cases for the later testing phase.
